@@ -43,17 +43,17 @@ fn extract_strings(chunk: &[u8]) -> String {
     for (i, &byte) in chunk.iter().enumerate() {
         if is_string_byte(byte) {
             start.get_or_insert(i);
-        } else if let Some(start) = start.take()
-            && let Ok(string) = std::str::from_utf8(&chunk[start..i])
-        {
+        } else if let Some(start) = start.take() {
+            // SAFETY: `is_string_byte` only accepts ASCII bytes, all of which are valid UTF-8.
+            let string = unsafe { std::str::from_utf8_unchecked(&chunk[start..i]) };
             output.push_str(string);
             output.push('\n');
         }
     }
 
-    if let Some(start) = start
-        && let Ok(string) = std::str::from_utf8(&chunk[start..])
-    {
+    if let Some(start) = start {
+        // SAFETY: `is_string_byte` only accepts ASCII bytes, all of which are valid UTF-8.
+        let string = unsafe { std::str::from_utf8_unchecked(&chunk[start..]) };
         output.push_str(string);
         output.push('\n');
     }
