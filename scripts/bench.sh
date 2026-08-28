@@ -62,6 +62,7 @@ for ((i = 0; i < RUNS; i++)); do
     # --- Baseline ---
     start=$(date +%s.%N)
     taskset -c "$BASE_CPUS" "$BASELINE" "$TESTBIN" > /dev/null
+    # taskset -c "$BASE_CPUS" strings -n 1 "$TESTBIN" > /dev/null
     end=$(date +%s.%N)
     BASE_TIME=$(awk "BEGIN {printf \"%.6f\", $end - $start}")
     BASE_TIMES+=("$BASE_TIME")
@@ -69,6 +70,7 @@ for ((i = 0; i < RUNS; i++)); do
     # --- Patch ---
     start=$(date +%s.%N)
     taskset -c "$PATCH_CPUS" "$PATCH" "$TESTBIN" > /dev/null
+    # taskset -c "$PATCH_CPUS" env RAYON_NUM_THREADS=1 "$PATCH" "$TESTBIN" > /dev/null
     end=$(date +%s.%N)
     PATCH_TIME=$(awk "BEGIN {printf \"%.6f\", $end - $start}")
     PATCH_TIMES+=("$PATCH_TIME")
