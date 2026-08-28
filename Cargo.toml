@@ -1,0 +1,9 @@
+[package]
+name = "binstr"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.6", features = ["derive"] }
+memmap2 = "0.9.11"
+rayon = "1.12.0"
