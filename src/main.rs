@@ -36,28 +36,33 @@ fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
     boundaries
 }
 
-fn extract_strings(chunk: &[u8]) -> String {
-    let mut output = String::new();
+fn extract_strings(chunk: &[u8]) -> Vec<u8> {
+    let mut output: Vec<u8> = Vec::with_capacity(chunk.len() + 1);
+    let mut len = 0usize;
     let mut start = None;
 
-    for (i, &byte) in chunk.iter().enumerate() {
-        if is_string_byte(byte) {
-            start.get_or_insert(i);
-        } else if let Some(start) = start.take() {
-            // SAFETY: `is_string_byte` only accepts ASCII bytes, all of which are valid UTF-8.
-            let string = unsafe { std::str::from_utf8_unchecked(&chunk[start..i]) };
-            output.push_str(string);
-            output.push('\n');
+    unsafe {
+        let base = output.as_mut_ptr();
+        for (i, &byte) in chunk.iter().enumerate() {
+            if is_string_byte(byte) {
+                start.get_or_insert(i);
+            } else if let Some(s) = start.take() {
+                let run_len = i - s;
+                std::ptr::copy_nonoverlapping(chunk.as_ptr().add(s), base.add(len), run_len);
+                len += run_len;
+                *base.add(len) = b'\n';
+                len += 1;
+            }
         }
+        if let Some(s) = start {
+            let run_len = chunk.len() - s;
+            std::ptr::copy_nonoverlapping(chunk.as_ptr().add(s), base.add(len), run_len);
+            len += run_len;
+            *base.add(len) = b'\n';
+            len += 1;
+        }
+        output.set_len(len);
     }
-
-    if let Some(start) = start {
-        // SAFETY: `is_string_byte` only accepts ASCII bytes, all of which are valid UTF-8.
-        let string = unsafe { std::str::from_utf8_unchecked(&chunk[start..]) };
-        output.push_str(string);
-        output.push('\n');
-    }
-
     output
 }
 
@@ -75,7 +80,7 @@ fn main() -> io::Result<()> {
         .map(|window| &bytes[window[0]..window[1]])
         .collect();
 
-    let results: Vec<String> = chunks
+    let results: Vec<Vec<u8>> = chunks
         .par_iter()
         .map(|chunk| extract_strings(chunk))
         .collect();
@@ -84,7 +89,7 @@ fn main() -> io::Result<()> {
     let mut stdout = io::BufWriter::new(stdout.lock());
 
     for result in results {
-        stdout.write_all(result.as_bytes())?;
+        stdout.write_all(&result)?;
     }
 
     Ok(())
