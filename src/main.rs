@@ -12,6 +12,55 @@ struct Args {
     file: PathBuf,
 }
 
+fn is_string_byte(b: u8) -> bool {
+    b.is_ascii_graphic() || matches!(b, b' ' | b'\t')
+}
+
+fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
+    let mut boundaries = vec![0];
+    let mut pos = chunk_size.min(bytes.len());
+
+    while pos < bytes.len() {
+        while pos < bytes.len() && is_string_byte(bytes[pos]) {
+            pos += 1;
+        }
+
+        boundaries.push(pos);
+        pos = (pos + chunk_size).min(bytes.len());
+    }
+
+    if *boundaries.last().unwrap() != bytes.len() {
+        boundaries.push(bytes.len());
+    }
+
+    boundaries
+}
+
+fn extract_strings(chunk: &[u8]) -> String {
+    let mut output = String::new();
+    let mut start = None;
+
+    for (i, &byte) in chunk.iter().enumerate() {
+        if is_string_byte(byte) {
+            start.get_or_insert(i);
+        } else if let Some(start) = start.take()
+            && let Ok(string) = std::str::from_utf8(&chunk[start..i])
+        {
+            output.push_str(string);
+            output.push('\n');
+        }
+    }
+
+    if let Some(start) = start
+        && let Ok(string) = std::str::from_utf8(&chunk[start..])
+    {
+        output.push_str(string);
+        output.push('\n');
+    }
+
+    output
+}
+
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
@@ -20,46 +69,22 @@ fn main() -> io::Result<()> {
     let bytes: &[u8] = &mmap;
 
     let chunk_size = 1_048_576;
-    let stdout = io::stdout();
-    let mut handle = io::BufWriter::new(stdout.lock());
-
-    let results: Vec<String> = bytes
-        .par_chunks(chunk_size)
-        .map(|chunk| {
-            let mut local_output = String::new();
-            let mut start_idx = None;
-
-            for (i, &byte) in chunk.iter().enumerate() {
-                if byte.is_ascii_graphic() || byte == b' ' || byte == b'\t' {
-                    if start_idx.is_none() {
-                        start_idx = Some(i);
-                    }
-                } else {
-                    if let Some(start) = start_idx {
-                        if let Ok(valid_str) = std::str::from_utf8(&chunk[start..i]) {
-                            local_output.push_str(valid_str);
-                            local_output.push('\n');
-                        }
-                        start_idx = None;
-                    }
-                }
-            }
-
-            if let Some(start) = start_idx {
-                if let Ok(valid_str) = std::str::from_utf8(&chunk[start..]) {
-                    local_output.push_str(valid_str);
-                    local_output.push('\n');
-                }
-            }
-
-            local_output
-        })
+    let boundaries = chunk_boundaries(bytes, chunk_size);
+    let chunks: Vec<_> = boundaries
+        .windows(2)
+        .map(|window| &bytes[window[0]..window[1]])
         .collect();
 
-    for chunk_string in results {
-        if !chunk_string.is_empty() {
-            handle.write_all(chunk_string.as_bytes())?;
-        }
+    let results: Vec<String> = chunks
+        .par_iter()
+        .map(|chunk| extract_strings(chunk))
+        .collect();
+
+    let stdout = io::stdout();
+    let mut stdout = io::BufWriter::new(stdout.lock());
+
+    for result in results {
+        stdout.write_all(result.as_bytes())?;
     }
 
     Ok(())
