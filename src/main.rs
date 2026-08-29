@@ -9,11 +9,15 @@ use std::path::PathBuf;
 #[command(name = "binstr")]
 struct Args {
     #[arg(required = true)]
-    file: PathBuf,
+    files: Vec<PathBuf>,
 
     /// Minimum length of matched string
     #[arg(short = 'n', long = "bytes", default_value_t = 4)]
     min_len: usize,
+
+    /// Suppress filename prefix
+    #[arg(short = 'I', long = "no-filename")]
+    no_filename: bool,
 }
 
 fn is_string_byte(b: u8) -> bool {
@@ -78,28 +82,38 @@ fn extract_strings(chunk: &[u8], min_len: usize) -> Vec<u8> {
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
-    let file = File::open(&args.file)?;
-    let mmap = unsafe { MmapOptions::new().map(&file)? };
-    let bytes: &[u8] = &mmap;
+    for file_path in &args.files {
+        let file = File::open(file_path)?;
+        let mmap = unsafe { MmapOptions::new().map(&file)? };
+        let bytes: &[u8] = &mmap;
 
-    let chunk_size = 1_048_576;
-    let boundaries = chunk_boundaries(bytes, chunk_size);
-    let chunks: Vec<_> = boundaries
-        .windows(2)
-        .map(|window| &bytes[window[0]..window[1]])
-        .collect();
+        let chunk_size = 1_048_576;
+        let boundaries = chunk_boundaries(bytes, chunk_size);
+        let chunks: Vec<_> = boundaries
+            .windows(2)
+            .map(|window| &bytes[window[0]..window[1]])
+            .collect();
 
-    let results: Vec<Vec<u8>> = chunks
-        .par_iter()
-        .map(|chunk| extract_strings(chunk, args.min_len))
-        .collect();
+        let results: Vec<Vec<u8>> = chunks
+            .par_iter()
+            .map(|chunk| extract_strings(chunk, args.min_len))
+            .collect();
 
-    let stdout = io::stdout();
-    let mut stdout = io::BufWriter::new(stdout.lock());
+        let stdout = io::stdout();
+        let mut stdout = io::BufWriter::new(stdout.lock());
 
-    for result in results {
-        stdout.write_all(&result)?;
+        let has_matches = results.iter().any(|r| !r.is_empty());
+        if has_matches && !args.no_filename {
+            let path_str = file_path
+                .to_str()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "non-UTF8 path"))?;
+            stdout.write_all(path_str.as_bytes())?;
+            stdout.write_all(b"\n")?;
+        }
+
+        for result in results {
+            stdout.write_all(&result)?;
+        }
     }
-
     Ok(())
 }
