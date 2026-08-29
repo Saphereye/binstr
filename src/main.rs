@@ -10,6 +10,10 @@ use std::path::PathBuf;
 struct Args {
     #[arg(required = true)]
     file: PathBuf,
+
+    /// Minimum length of matched string
+    #[arg(short = 'n', long = "bytes", default_value_t = 4)]
+    min_len: usize,
 }
 
 fn is_string_byte(b: u8) -> bool {
@@ -36,7 +40,7 @@ fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
     boundaries
 }
 
-fn extract_strings(chunk: &[u8]) -> Vec<u8> {
+fn extract_strings(chunk: &[u8], min_len: usize) -> Vec<u8> {
     let mut output: Vec<u8> = Vec::with_capacity(chunk.len() + 1);
     let mut len = 0usize;
     let mut start = None;
@@ -48,19 +52,24 @@ fn extract_strings(chunk: &[u8]) -> Vec<u8> {
                 start.get_or_insert(i);
             } else if let Some(s) = start.take() {
                 let run_len = i - s;
+                if run_len >= min_len {
+                    std::ptr::copy_nonoverlapping(chunk.as_ptr().add(s), base.add(len), run_len);
+                    len += run_len;
+                    *base.add(len) = b'\n';
+                    len += 1;
+                }
+            }
+        }
+        if let Some(s) = start {
+            let run_len = chunk.len() - s;
+            if run_len >= min_len {
                 std::ptr::copy_nonoverlapping(chunk.as_ptr().add(s), base.add(len), run_len);
                 len += run_len;
                 *base.add(len) = b'\n';
                 len += 1;
             }
         }
-        if let Some(s) = start {
-            let run_len = chunk.len() - s;
-            std::ptr::copy_nonoverlapping(chunk.as_ptr().add(s), base.add(len), run_len);
-            len += run_len;
-            *base.add(len) = b'\n';
-            len += 1;
-        }
+
         output.set_len(len);
     }
     output
@@ -82,7 +91,7 @@ fn main() -> io::Result<()> {
 
     let results: Vec<Vec<u8>> = chunks
         .par_iter()
-        .map(|chunk| extract_strings(chunk))
+        .map(|chunk| extract_strings(chunk, args.min_len))
         .collect();
 
     let stdout = io::stdout();
