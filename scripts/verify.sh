@@ -4,7 +4,4 @@ set -e
 TESTBIN="/usr/bin/godot"
 
 cargo build --release
-./target/release/binstr $TESTBIN > baseline.todiff
-strings $TESTBIN > strings.todiff
-
-git diff --no-index baseline.todiff strings.todiff
+git diff --no-index <(./target/release/binstr -N -I /usr/bin/godot) <(strings /usr/bin/godot)

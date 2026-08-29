@@ -18,6 +18,21 @@ struct Args {
     /// Suppress filename prefix
     #[arg(short = 'I', long = "no-filename")]
     no_filename: bool,
+
+    /// Suppress byte-offset prefix
+    #[arg(short = 'N', long = "no-offset")]
+    no_offset: bool,
+
+    /// Radix of the string location byte offset
+    #[arg(short = 't', long, value_enum, default_value = "d")]
+    radix: Radix,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum, Debug)]
+enum Radix {
+    D,
+    O,
+    X,
 }
 
 fn is_string_byte(b: u8) -> bool {
@@ -44,8 +59,22 @@ fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
     boundaries
 }
 
-fn extract_strings(chunk: &[u8], min_len: usize) -> Vec<u8> {
-    let mut output: Vec<u8> = Vec::with_capacity(chunk.len() + 1);
+fn extract_strings(
+    chunk: &[u8],
+    min_len: usize,
+    base_off: usize,
+    show_offset: bool,
+    radix: Radix,
+) -> Vec<u8> {
+    let mut output: Vec<u8> = Vec::with_capacity(
+        chunk.len()
+            + 1
+            + if show_offset {
+                chunk.len() / min_len.max(1) * 24
+            } else {
+                0
+            },
+    );
     let mut len = 0usize;
     let mut start = None;
 
@@ -57,6 +86,9 @@ fn extract_strings(chunk: &[u8], min_len: usize) -> Vec<u8> {
             } else if let Some(s) = start.take() {
                 let run_len = i - s;
                 if run_len >= min_len {
+                    if show_offset {
+                        write_offset(base, &mut len, base_off + s, radix);
+                    }
                     std::ptr::copy_nonoverlapping(chunk.as_ptr().add(s), base.add(len), run_len);
                     len += run_len;
                     *base.add(len) = b'\n';
@@ -67,6 +99,9 @@ fn extract_strings(chunk: &[u8], min_len: usize) -> Vec<u8> {
         if let Some(s) = start {
             let run_len = chunk.len() - s;
             if run_len >= min_len {
+                if show_offset {
+                    write_offset(base, &mut len, base_off + s, radix);
+                }
                 std::ptr::copy_nonoverlapping(chunk.as_ptr().add(s), base.add(len), run_len);
                 len += run_len;
                 *base.add(len) = b'\n';
@@ -79,6 +114,33 @@ fn extract_strings(chunk: &[u8], min_len: usize) -> Vec<u8> {
     output
 }
 
+fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix) {
+    let mut buf = [0u8; 24];
+    let (b, digits): (usize, &[u8]) = match radix {
+        Radix::D => (10, b"0123456789"),
+        Radix::O => (8, b"01234567"),
+        Radix::X => (16, b"0123456789abcdef"),
+    };
+    let mut i = 23;
+    buf[i] = b':';
+    if n == 0 {
+        i -= 1;
+        buf[i] = b'0';
+    } else {
+        let mut n = n;
+        while n > 0 {
+            i -= 1;
+            buf[i] = digits[n % b];
+            n /= b;
+        }
+    }
+    let written = 24 - i;
+    unsafe {
+        std::ptr::copy_nonoverlapping(buf.as_ptr().add(i), base.add(*len), written);
+    }
+    *len += written;
+}
+
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
@@ -89,14 +151,19 @@ fn main() -> io::Result<()> {
 
         let chunk_size = 1_048_576;
         let boundaries = chunk_boundaries(bytes, chunk_size);
-        let chunks: Vec<_> = boundaries
-            .windows(2)
-            .map(|window| &bytes[window[0]..window[1]])
-            .collect();
+        let windows: Vec<[usize; 2]> = boundaries.windows(2).map(|w| [w[0], w[1]]).collect();
 
-        let results: Vec<Vec<u8>> = chunks
+        let results: Vec<Vec<u8>> = windows
             .par_iter()
-            .map(|chunk| extract_strings(chunk, args.min_len))
+            .map(|w| {
+                extract_strings(
+                    &bytes[w[0]..w[1]],
+                    args.min_len,
+                    w[0],
+                    !args.no_offset,
+                    args.radix,
+                )
+            })
             .collect();
 
         let stdout = io::stdout();
