@@ -36,7 +36,9 @@ enum Radix {
 }
 
 fn is_string_byte(b: u8) -> bool {
-    b.is_ascii_graphic() || matches!(b, b' ' | b'\t')
+    let in_range = (b.wrapping_sub(0x20) <= 0x5E) as u8;
+    let is_tab = (b == b'\t') as u8;
+    (in_range | is_tab) != 0
 }
 
 fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
