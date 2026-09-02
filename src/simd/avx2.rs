@@ -1,6 +1,6 @@
 use std::arch::x86_64::*;
 
-use super::{classify, BLOCK, Step32};
+use super::{BLOCK, Step32, classify};
 
 fn mask32(ptr: *const u8) -> u32 {
     unsafe {

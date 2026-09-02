@@ -7,7 +7,7 @@ pub enum Step32 {
 
 pub const BLOCK: usize = 32;
 
-pub(super) fn classify(mask: u32, in_run: bool) -> Step32 {
+pub const fn classify(mask: u32, in_run: bool) -> Step32 {
     if mask == 0 {
         return Step32::Blank(BLOCK);
     }

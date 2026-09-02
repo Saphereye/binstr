@@ -45,7 +45,7 @@ const SGR_DIM: &[u8] = b"\x1b[2m";
 const SGR_BOLD: &[u8] = b"\x1b[1m";
 const SGR_RESET: &[u8] = b"\x1b[0m";
 
-fn is_string_byte(b: u8) -> bool {
+const fn is_string_byte(b: u8) -> bool {
     let in_range = (b.wrapping_sub(0x20) <= 0x5E) as u8;
     let is_tab = (b == b'\t') as u8;
     (in_range | is_tab) != 0
@@ -82,11 +82,11 @@ fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
     boundaries
 }
 
-fn offset_width(max: usize, radix: Radix) -> usize {
+const fn offset_width(max: usize, radix: Radix) -> usize {
     match radix {
         Radix::D => max.ilog10() as usize + 1,
-        Radix::O => (usize::BITS as usize - max.leading_zeros() as usize + 2) / 3,
-        Radix::X => (usize::BITS as usize - max.leading_zeros() as usize + 3) / 4,
+        Radix::O => (usize::BITS as usize - max.leading_zeros() as usize).div_ceil(3),
+        Radix::X => (usize::BITS as usize - max.leading_zeros() as usize).div_ceil(4),
     }
 }
 

@@ -1,4 +1,4 @@
-use super::{classify, BLOCK, Step32};
+use super::{BLOCK, Step32, classify};
 
 #[inline(always)]
 fn is_string_byte(b: u8) -> bool {
