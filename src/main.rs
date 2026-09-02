@@ -4,7 +4,7 @@ use clap::Parser;
 use memmap2::MmapOptions;
 use rayon::prelude::*;
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -25,9 +25,13 @@ struct Args {
     #[arg(short = 'N', long = "no-offset")]
     no_offset: bool,
 
-    /// Radix of the string location byte offset
-    #[arg(short = 't', long, value_enum, default_value = "d")]
-    radix: Radix,
+    /// Print the file offset before each string
+    #[arg(short = 't', long, value_enum)]
+    radix: Option<Radix>,
+
+    /// Human-friendly terminal output when piped
+    #[arg(short = 'p', long = "pretty")]
+    pretty: bool,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum, Debug)]
@@ -36,6 +40,10 @@ enum Radix {
     O,
     X,
 }
+
+const SGR_DIM: &[u8] = b"\x1b[2m";
+const SGR_BOLD: &[u8] = b"\x1b[1m";
+const SGR_RESET: &[u8] = b"\x1b[0m";
 
 fn is_string_byte(b: u8) -> bool {
     let in_range = (b.wrapping_sub(0x20) <= 0x5E) as u8;
@@ -74,12 +82,30 @@ fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
     boundaries
 }
 
+fn offset_width(max: usize, radix: Radix) -> usize {
+    match radix {
+        Radix::D => max.ilog10() as usize + 1,
+        Radix::O => (usize::BITS as usize - max.leading_zeros() as usize + 2) / 3,
+        Radix::X => (usize::BITS as usize - max.leading_zeros() as usize + 3) / 4,
+    }
+}
+
+fn write_out(out: &mut impl Write, buf: &[u8]) -> io::Result<bool> {
+    match out.write_all(buf) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 fn extract_strings(
     chunk: &[u8],
     min_len: usize,
     base_off: usize,
     show_offset: bool,
     radix: Radix,
+    color: bool,
+    offset_width: usize,
 ) -> Vec<u8> {
     let mut output: Vec<u8> = Vec::with_capacity(
         chunk.len()
@@ -102,7 +128,19 @@ fn extract_strings(
                 match simd::step32(chunk.as_ptr().add(i), start.is_some()) {
                     simd::Step32::Blank(n) => {
                         if let Some(s) = start.take() {
-                            emit(base, &mut len, chunk, s, i, min_len, base_off, show_offset, radix);
+                            emit(
+                                base,
+                                &mut len,
+                                chunk,
+                                s,
+                                i,
+                                min_len,
+                                base_off,
+                                show_offset,
+                                radix,
+                                color,
+                                offset_width,
+                            );
                         }
                         i += n;
                     }
@@ -122,6 +160,8 @@ fn extract_strings(
                             base_off,
                             show_offset,
                             radix,
+                            color,
+                            offset_width,
                         );
                         i = end + 1;
                     }
@@ -129,7 +169,19 @@ fn extract_strings(
                         i += skip;
                         let end = i + run;
                         if run < simd::BLOCK - skip {
-                            emit(base, &mut len, chunk, i, end, min_len, base_off, show_offset, radix);
+                            emit(
+                                base,
+                                &mut len,
+                                chunk,
+                                i,
+                                end,
+                                min_len,
+                                base_off,
+                                show_offset,
+                                radix,
+                                color,
+                                offset_width,
+                            );
                             i = end + 1;
                         } else {
                             start = Some(i);
@@ -143,7 +195,19 @@ fn extract_strings(
             if is_string_byte(chunk[i]) {
                 start.get_or_insert(i);
             } else if let Some(s) = start.take() {
-                emit(base, &mut len, chunk, s, i, min_len, base_off, show_offset, radix);
+                emit(
+                    base,
+                    &mut len,
+                    chunk,
+                    s,
+                    i,
+                    min_len,
+                    base_off,
+                    show_offset,
+                    radix,
+                    color,
+                    offset_width,
+                );
             }
             i += 1;
         }
@@ -159,6 +223,8 @@ fn extract_strings(
                 base_off,
                 show_offset,
                 radix,
+                color,
+                offset_width,
             );
         }
         output.set_len(len);
@@ -176,6 +242,8 @@ unsafe fn emit(
     base_off: usize,
     show_offset: bool,
     radix: Radix,
+    color: bool,
+    offset_width: usize,
 ) {
     let run_len = end - start;
     if run_len < min_len {
@@ -183,7 +251,15 @@ unsafe fn emit(
     }
     unsafe {
         if show_offset {
-            write_offset(base, len, base_off + start, radix);
+            if color {
+                std::ptr::copy_nonoverlapping(SGR_DIM.as_ptr(), base.add(*len), SGR_DIM.len());
+                *len += SGR_DIM.len();
+            }
+            write_offset(base, len, base_off + start, radix, offset_width);
+            if color {
+                std::ptr::copy_nonoverlapping(SGR_RESET.as_ptr(), base.add(*len), SGR_RESET.len());
+                *len += SGR_RESET.len();
+            }
         }
         std::ptr::copy_nonoverlapping(chunk.as_ptr().add(start), base.add(*len), run_len);
         *len += run_len;
@@ -192,7 +268,7 @@ unsafe fn emit(
     }
 }
 
-fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix) {
+fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix, width: usize) {
     let mut buf = [0u8; 24];
     let (b, digits): (usize, &[u8]) = match radix {
         Radix::D => (10, b"0123456789"),
@@ -212,6 +288,9 @@ fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix) {
             n /= b;
         }
     }
+    let pad = width.saturating_sub(23 - i);
+    i -= pad;
+    buf[i..i + pad].fill(b' ');
     let written = 24 - i;
     unsafe {
         std::ptr::copy_nonoverlapping(buf.as_ptr().add(i), base.add(*len), written);
@@ -221,11 +300,20 @@ fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix) {
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
+    let interactive = args.pretty || io::stdout().is_terminal();
+    let show_offset = !args.no_offset && (interactive || args.radix.is_some());
+    let radix = args.radix.unwrap_or(Radix::D);
+    let color = interactive && std::env::var_os("NO_COLOR").is_none();
 
     for file_path in &args.files {
         let file = File::open(file_path)?;
         let mmap = unsafe { MmapOptions::new().map(&file)? };
         let bytes: &[u8] = &mmap;
+        let offset_width = if interactive && show_offset {
+            offset_width(bytes.len().saturating_sub(1), radix)
+        } else {
+            0
+        };
 
         let chunk_size = 1_048_576;
         let boundaries = chunk_boundaries(bytes, chunk_size);
@@ -238,8 +326,10 @@ fn main() -> io::Result<()> {
                     &bytes[w[0]..w[1]],
                     args.min_len,
                     w[0],
-                    !args.no_offset,
-                    args.radix,
+                    show_offset,
+                    radix,
+                    color,
+                    offset_width,
                 )
             })
             .collect();
@@ -248,16 +338,28 @@ fn main() -> io::Result<()> {
         let mut stdout = io::BufWriter::new(stdout.lock());
 
         let has_matches = results.iter().any(|r| !r.is_empty());
-        if has_matches && !args.no_filename {
+        if has_matches && interactive && !args.no_filename {
             let path_str = file_path
                 .to_str()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "non-UTF8 path"))?;
-            stdout.write_all(path_str.as_bytes())?;
-            stdout.write_all(b"\n")?;
+            if color && !write_out(&mut stdout, SGR_BOLD)? {
+                return Ok(());
+            }
+            if !write_out(&mut stdout, path_str.as_bytes())? {
+                return Ok(());
+            }
+            if color && !write_out(&mut stdout, SGR_RESET)? {
+                return Ok(());
+            }
+            if !write_out(&mut stdout, b"\n")? {
+                return Ok(());
+            }
         }
 
         for result in results {
-            stdout.write_all(&result)?;
+            if !write_out(&mut stdout, &result)? {
+                return Ok(());
+            }
         }
     }
     Ok(())
