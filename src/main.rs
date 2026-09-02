@@ -1,3 +1,5 @@
+mod simd;
+
 use clap::Parser;
 use memmap2::MmapOptions;
 use rayon::prelude::*;
@@ -46,10 +48,21 @@ fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
     let mut pos = chunk_size.min(bytes.len());
 
     while pos < bytes.len() {
-        while pos < bytes.len() && is_string_byte(bytes[pos]) {
-            pos += 1;
+        while pos < bytes.len() {
+            if pos + simd::BLOCK <= bytes.len() {
+                let run = simd::string_run(unsafe { bytes.as_ptr().add(pos) });
+                pos += run;
+                if run < simd::BLOCK {
+                    break;
+                }
+                continue;
+            }
+            if is_string_byte(bytes[pos]) {
+                pos += 1;
+            } else {
+                break;
+            }
         }
-
         boundaries.push(pos);
         pos = (pos + chunk_size).min(bytes.len());
     }
@@ -82,38 +95,101 @@ fn extract_strings(
 
     unsafe {
         let base = output.as_mut_ptr();
-        for (i, &byte) in chunk.iter().enumerate() {
-            if is_string_byte(byte) {
+        let mut i = 0usize;
+
+        while i < chunk.len() {
+            if i + simd::BLOCK <= chunk.len() {
+                match simd::step32(chunk.as_ptr().add(i), start.is_some()) {
+                    simd::Step32::Blank(n) => {
+                        if let Some(s) = start.take() {
+                            emit(base, &mut len, chunk, s, i, min_len, base_off, show_offset, radix);
+                        }
+                        i += n;
+                    }
+                    simd::Step32::Solid(n) => {
+                        start.get_or_insert(i);
+                        i += n;
+                    }
+                    simd::Step32::Closed(n) => {
+                        let end = i + n;
+                        emit(
+                            base,
+                            &mut len,
+                            chunk,
+                            start.take().unwrap(),
+                            end,
+                            min_len,
+                            base_off,
+                            show_offset,
+                            radix,
+                        );
+                        i = end + 1;
+                    }
+                    simd::Step32::Opened { skip, len: run } => {
+                        i += skip;
+                        let end = i + run;
+                        if run < simd::BLOCK - skip {
+                            emit(base, &mut len, chunk, i, end, min_len, base_off, show_offset, radix);
+                            i = end + 1;
+                        } else {
+                            start = Some(i);
+                            i = end;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if is_string_byte(chunk[i]) {
                 start.get_or_insert(i);
             } else if let Some(s) = start.take() {
-                let run_len = i - s;
-                if run_len >= min_len {
-                    if show_offset {
-                        write_offset(base, &mut len, base_off + s, radix);
-                    }
-                    std::ptr::copy_nonoverlapping(chunk.as_ptr().add(s), base.add(len), run_len);
-                    len += run_len;
-                    *base.add(len) = b'\n';
-                    len += 1;
-                }
+                emit(base, &mut len, chunk, s, i, min_len, base_off, show_offset, radix);
             }
-        }
-        if let Some(s) = start {
-            let run_len = chunk.len() - s;
-            if run_len >= min_len {
-                if show_offset {
-                    write_offset(base, &mut len, base_off + s, radix);
-                }
-                std::ptr::copy_nonoverlapping(chunk.as_ptr().add(s), base.add(len), run_len);
-                len += run_len;
-                *base.add(len) = b'\n';
-                len += 1;
-            }
+            i += 1;
         }
 
+        if let Some(s) = start {
+            emit(
+                base,
+                &mut len,
+                chunk,
+                s,
+                chunk.len(),
+                min_len,
+                base_off,
+                show_offset,
+                radix,
+            );
+        }
         output.set_len(len);
     }
     output
+}
+
+unsafe fn emit(
+    base: *mut u8,
+    len: &mut usize,
+    chunk: &[u8],
+    start: usize,
+    end: usize,
+    min_len: usize,
+    base_off: usize,
+    show_offset: bool,
+    radix: Radix,
+) {
+    let run_len = end - start;
+    if run_len < min_len {
+        return;
+    }
+    unsafe {
+        if show_offset {
+            write_offset(base, len, base_off + start, radix);
+        }
+        std::ptr::copy_nonoverlapping(chunk.as_ptr().add(start), base.add(*len), run_len);
+        *len += run_len;
+        *base.add(*len) = b'\n';
+        *len += 1;
+    }
 }
 
 fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix) {
