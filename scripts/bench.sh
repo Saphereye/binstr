@@ -130,17 +130,31 @@ for ((i = 0; i < RUNS; i++)); do
     PATCH_CPUS=$CPUS_A
   fi
 
-  start=$(date +%s.%N)
-  run_scan "$BASE_CPUS" "$BASELINE"
-  end=$(date +%s.%N)
-  BASE_TIME=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }')
-  BASE_TIMES+=("$BASE_TIME")
+  if (( i % 2 == 0 )); then
+    start=$(date +%s.%N)
+    run_scan "$BASE_CPUS" "$BASELINE"
+    end=$(date +%s.%N)
+    BASE_TIME=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }')
+    BASE_TIMES+=("$BASE_TIME")
 
-  start=$(date +%s.%N)
-  run_scan "$PATCH_CPUS" "$PATCH"
-  end=$(date +%s.%N)
-  PATCH_TIME=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }')
-  PATCH_TIMES+=("$PATCH_TIME")
+    start=$(date +%s.%N)
+    run_scan "$PATCH_CPUS" "$PATCH"
+    end=$(date +%s.%N)
+    PATCH_TIME=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }')
+    PATCH_TIMES+=("$PATCH_TIME")
+  else
+    start=$(date +%s.%N)
+    run_scan "$PATCH_CPUS" "$PATCH"
+    end=$(date +%s.%N)
+    PATCH_TIME=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }')
+    PATCH_TIMES+=("$PATCH_TIME")
+
+    start=$(date +%s.%N)
+    run_scan "$BASE_CPUS" "$BASELINE"
+    end=$(date +%s.%N)
+    BASE_TIME=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }')
+    BASE_TIMES+=("$BASE_TIME")
+  fi
 
   BASE_MS=$(awk -v t="$BASE_TIME" 'BEGIN { printf "%.3f", t * 1000 }')
   PATCH_MS=$(awk -v t="$PATCH_TIME" 'BEGIN { printf "%.3f", t * 1000 }')
