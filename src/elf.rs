@@ -23,9 +23,9 @@ fn exec_sections(bytes: &[u8]) -> Option<Vec<(usize, usize)>> {
         }
     };
 
-    let shoff = read_u64(40) as usize;
-    let shentsize = read_u16(58) as usize;
-    let shnum = read_u16(60) as usize;
+    let shoff = usize::try_from(read_u64(40)).ok()?;
+    let shentsize = usize::from(read_u16(58));
+    let shnum = usize::from(read_u16(60));
     if shentsize < 64 || shoff.saturating_add(shnum.saturating_mul(shentsize)) > bytes.len() {
         return None;
     }
@@ -37,8 +37,8 @@ fn exec_sections(bytes: &[u8]) -> Option<Vec<(usize, usize)>> {
         if sh_flags & 0x4 == 0 {
             continue;
         }
-        let sh_offset = read_u64(i + 24) as usize;
-        let sh_size = read_u64(i + 32) as usize;
+        let sh_offset = usize::try_from(read_u64(i + 24)).ok()?;
+        let sh_size = usize::try_from(read_u64(i + 32)).ok()?;
         if sh_size == 0 {
             continue;
         }
@@ -59,11 +59,11 @@ fn exec_sections(bytes: &[u8]) -> Option<Vec<(usize, usize)>> {
 fn invert_ranges(exclude: Vec<(usize, usize)>, len: usize) -> Vec<(usize, usize)> {
     let mut merged: Vec<(usize, usize)> = Vec::new();
     for (start, end) in exclude {
-        if let Some(last) = merged.last_mut() {
-            if start <= last.1 {
-                last.1 = last.1.max(end);
-                continue;
-            }
+        if let Some(last) = merged.last_mut()
+            && start <= last.1
+        {
+            last.1 = last.1.max(end);
+            continue;
         }
         merged.push((start, end));
     }
