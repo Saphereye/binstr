@@ -180,6 +180,99 @@ struct ScanConfig {
     heading: bool,
 }
 
+const CHUNK_SIZE: usize = 1_048_576;
+
+const fn is_plain_scan(cfg: ScanConfig, prefix: Option<&[u8]>) -> bool {
+    prefix.is_none() && !cfg.show_offset && !cfg.color && !cfg.line_prefix && !cfg.whitespace
+}
+
+fn extract_plain(chunk: &[u8], min_len: usize, sep: u8) -> Vec<u8> {
+    let mut output: Vec<u8> = Vec::with_capacity(chunk.len() + chunk.len() / min_len.max(1));
+    let mut len = 0usize;
+    let mut start = None;
+
+    unsafe {
+        let base = output.as_mut_ptr();
+        let mut i = 0usize;
+
+        while i < chunk.len() {
+            if i + simd::BLOCK <= chunk.len() {
+                match simd::step32(chunk.as_ptr().add(i), start.is_some()) {
+                    simd::Step32::Blank(n) => {
+                        if let Some(s) = start.take() {
+                            emit_plain(base, &mut len, chunk, s, i, min_len, sep);
+                        }
+                        i += n;
+                    }
+                    simd::Step32::Solid(n) => {
+                        start.get_or_insert(i);
+                        i += n;
+                    }
+                    simd::Step32::Closed(n) => {
+                        let end = i + n;
+                        emit_plain(
+                            base,
+                            &mut len,
+                            chunk,
+                            start.take().unwrap(),
+                            end,
+                            min_len,
+                            sep,
+                        );
+                        i = end + 1;
+                    }
+                    simd::Step32::Opened { skip, len: run } => {
+                        i += skip;
+                        let end = i + run;
+                        if run < simd::BLOCK - skip {
+                            emit_plain(base, &mut len, chunk, i, end, min_len, sep);
+                            i = end + 1;
+                        } else {
+                            start = Some(i);
+                            i = end;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if is_string_byte(chunk[i]) {
+                start.get_or_insert(i);
+            } else if let Some(s) = start.take() {
+                emit_plain(base, &mut len, chunk, s, i, min_len, sep);
+            }
+            i += 1;
+        }
+
+        if let Some(s) = start {
+            emit_plain(base, &mut len, chunk, s, chunk.len(), min_len, sep);
+        }
+        output.set_len(len);
+    }
+    output
+}
+
+unsafe fn emit_plain(
+    base: *mut u8,
+    len: &mut usize,
+    chunk: &[u8],
+    start: usize,
+    end: usize,
+    min_len: usize,
+    sep: u8,
+) {
+    if end - start < min_len {
+        return;
+    }
+    unsafe {
+        let run_len = end - start;
+        std::ptr::copy_nonoverlapping(chunk.as_ptr().add(start), base.add(*len), run_len);
+        *len += run_len;
+        *base.add(*len) = sep;
+        *len += 1;
+    }
+}
+
 fn extract_strings(chunk: &[u8], cfg: &ExtractConfig<'_>) -> Vec<u8> {
     let mut output: Vec<u8> = Vec::with_capacity(
         chunk.len()
@@ -344,13 +437,21 @@ fn process_slice(
     cfg: ScanConfig,
     prefix: Option<&[u8]>,
 ) -> Vec<Vec<u8>> {
-    let chunk_size = 1_048_576;
+    let plain = is_plain_scan(cfg, prefix);
     let boundaries = if cfg.whitespace {
-        chunk_boundaries_ws(slice, chunk_size)
+        chunk_boundaries_ws(slice, CHUNK_SIZE)
     } else {
-        chunk_boundaries(slice, chunk_size)
+        chunk_boundaries(slice, CHUNK_SIZE)
     };
     let windows: Vec<[usize; 2]> = boundaries.windows(2).map(|w| [w[0], w[1]]).collect();
+
+    if plain {
+        return windows
+            .par_iter()
+            .map(|w| extract_plain(&slice[w[0]..w[1]], cfg.min_len, cfg.sep))
+            .collect();
+    }
+
     windows
         .par_iter()
         .map(|w| {
