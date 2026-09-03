@@ -4,33 +4,57 @@ use clap::Parser;
 use memmap2::MmapOptions;
 use rayon::prelude::*;
 use std::fs::File;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "binstr")]
+#[command(
+    name = "binstr",
+    about = "Display printable strings in files (stdin if no files given).",
+    after_help = "On a terminal, offsets, headings, and color are enabled by default.\nPiped output is plain unless -t or -p is used.",
+)]
 struct Args {
-    #[arg(required = true)]
+    #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
 
-    /// Minimum length of matched string
+    /// Scan the entire file
+    #[arg(short = 'a', default_value_t = true)]
+    all: bool,
+
+    /// Minimum string length
     #[arg(short = 'n', long = "bytes", default_value_t = 4)]
     min_len: usize,
 
-    /// Suppress filename prefix
-    #[arg(short = 'I', long = "no-filename")]
+    /// Print the file name before each string
+    #[arg(short = 'f')]
+    print_file_name: bool,
+
+    /// Suppress the file name heading
+    #[arg(short = 'I')]
     no_filename: bool,
 
-    /// Suppress byte-offset prefix
-    #[arg(short = 'N', long = "no-offset")]
+    /// Suppress the byte-offset prefix
+    #[arg(short = 'N')]
     no_offset: bool,
 
-    /// Print the file offset before each string
-    #[arg(short = 't', long, value_enum)]
+    /// Print the offset before each string
+    #[arg(short = 't', value_enum)]
     radix: Option<Radix>,
 
-    /// Human-friendly terminal output when piped
-    #[arg(short = 'p', long = "pretty")]
+    /// An alias for -t o
+    #[arg(short = 'o')]
+    octal_offset: bool,
+
+    /// Include all whitespace as valid string characters
+    #[arg(short = 'w')]
+    include_all_whitespace: bool,
+
+    /// String used to separate strings in output
+    #[arg(short = 's', long = "output-separator", default_value = "\n")]
+    separator: String,
+
+    /// Enable headings, offsets, and color when not attached to a terminal
+    #[arg(short = 'p')]
     pretty: bool,
 }
 
@@ -45,19 +69,23 @@ const SGR_DIM: &[u8] = b"\x1b[2m";
 const SGR_BOLD: &[u8] = b"\x1b[1m";
 const SGR_RESET: &[u8] = b"\x1b[0m";
 
-const fn is_string_byte(b: u8) -> bool {
-    let in_range = (b.wrapping_sub(0x20) <= 0x5E) as u8;
-    let is_tab = (b == b'\t') as u8;
-    (in_range | is_tab) != 0
+fn is_string_byte(b: u8, whitespace: bool) -> bool {
+    if whitespace {
+        matches!(b, 0x09 | 0x0A | 0x0B | 0x0C | 0x0D | 0x20..=0x7E)
+    } else {
+        let in_range = (b.wrapping_sub(0x20) <= 0x5E) as u8;
+        let is_tab = (b == b'\t') as u8;
+        (in_range | is_tab) != 0
+    }
 }
 
-fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
+fn chunk_boundaries(bytes: &[u8], chunk_size: usize, whitespace: bool) -> Vec<usize> {
     let mut boundaries = vec![0];
     let mut pos = chunk_size.min(bytes.len());
 
     while pos < bytes.len() {
         while pos < bytes.len() {
-            if pos + simd::BLOCK <= bytes.len() {
+            if !whitespace && pos + simd::BLOCK <= bytes.len() {
                 let run = simd::string_run(unsafe { bytes.as_ptr().add(pos) });
                 pos += run;
                 if run < simd::BLOCK {
@@ -65,7 +93,7 @@ fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
                 }
                 continue;
             }
-            if is_string_byte(bytes[pos]) {
+            if is_string_byte(bytes[pos], whitespace) {
                 pos += 1;
             } else {
                 break;
@@ -106,6 +134,9 @@ fn extract_strings(
     radix: Radix,
     color: bool,
     offset_width: usize,
+    whitespace: bool,
+    sep: u8,
+    prefix: Option<&[u8]>,
 ) -> Vec<u8> {
     let mut output: Vec<u8> = Vec::with_capacity(
         chunk.len()
@@ -124,7 +155,7 @@ fn extract_strings(
         let mut i = 0usize;
 
         while i < chunk.len() {
-            if i + simd::BLOCK <= chunk.len() {
+            if !whitespace && i + simd::BLOCK <= chunk.len() {
                 match simd::step32(chunk.as_ptr().add(i), start.is_some()) {
                     simd::Step32::Blank(n) => {
                         if let Some(s) = start.take() {
@@ -140,6 +171,8 @@ fn extract_strings(
                                 radix,
                                 color,
                                 offset_width,
+                                sep,
+                                prefix,
                             );
                         }
                         i += n;
@@ -162,6 +195,8 @@ fn extract_strings(
                             radix,
                             color,
                             offset_width,
+                            sep,
+                            prefix,
                         );
                         i = end + 1;
                     }
@@ -181,6 +216,8 @@ fn extract_strings(
                                 radix,
                                 color,
                                 offset_width,
+                                sep,
+                                prefix,
                             );
                             i = end + 1;
                         } else {
@@ -192,7 +229,7 @@ fn extract_strings(
                 continue;
             }
 
-            if is_string_byte(chunk[i]) {
+            if is_string_byte(chunk[i], whitespace) {
                 start.get_or_insert(i);
             } else if let Some(s) = start.take() {
                 emit(
@@ -207,6 +244,8 @@ fn extract_strings(
                     radix,
                     color,
                     offset_width,
+                    sep,
+                    prefix,
                 );
             }
             i += 1;
@@ -225,6 +264,8 @@ fn extract_strings(
                 radix,
                 color,
                 offset_width,
+                sep,
+                prefix,
             );
         }
         output.set_len(len);
@@ -244,12 +285,18 @@ unsafe fn emit(
     radix: Radix,
     color: bool,
     offset_width: usize,
+    sep: u8,
+    prefix: Option<&[u8]>,
 ) {
     let run_len = end - start;
     if run_len < min_len {
         return;
     }
     unsafe {
+        if let Some(prefix) = prefix {
+            std::ptr::copy_nonoverlapping(prefix.as_ptr(), base.add(*len), prefix.len());
+            *len += prefix.len();
+        }
         if show_offset {
             if color {
                 std::ptr::copy_nonoverlapping(SGR_DIM.as_ptr(), base.add(*len), SGR_DIM.len());
@@ -263,7 +310,7 @@ unsafe fn emit(
         }
         std::ptr::copy_nonoverlapping(chunk.as_ptr().add(start), base.add(*len), run_len);
         *len += run_len;
-        *base.add(*len) = b'\n';
+        *base.add(*len) = sep;
         *len += 1;
     }
 }
@@ -298,68 +345,157 @@ fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix, width: u
     *len += written;
 }
 
+fn scan_bytes(
+    bytes: &[u8],
+    file_path: &PathBuf,
+    min_len: usize,
+    whitespace: bool,
+    interactive: bool,
+    show_offset: bool,
+    radix: Radix,
+    color: bool,
+    sep: u8,
+    line_prefix: bool,
+    heading: bool,
+    stdout: &mut impl Write,
+) -> io::Result<()> {
+    let off_width = if interactive && show_offset {
+        offset_width(bytes.len().saturating_sub(1), radix)
+    } else {
+        0
+    };
+    let prefix = if line_prefix {
+        let path_str = if file_path.as_os_str() == "-" {
+            "stdin"
+        } else {
+            file_path
+                .to_str()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "non-UTF8 path"))?
+        };
+        Some(format!("{path_str}: ").into_bytes())
+    } else {
+        None
+    };
+    let prefix_ref = prefix.as_deref();
+
+    let chunk_size = 1_048_576;
+    let boundaries = chunk_boundaries(bytes, chunk_size, whitespace);
+    let windows: Vec<[usize; 2]> = boundaries.windows(2).map(|w| [w[0], w[1]]).collect();
+
+    let results: Vec<Vec<u8>> = windows
+        .par_iter()
+        .map(|w| {
+            extract_strings(
+                &bytes[w[0]..w[1]],
+                min_len,
+                w[0],
+                show_offset,
+                radix,
+                color,
+                off_width,
+                whitespace,
+                sep,
+                prefix_ref,
+            )
+        })
+        .collect();
+
+    let has_matches = results.iter().any(|r| !r.is_empty());
+    if has_matches && heading {
+        let path_str = if file_path.as_os_str() == "-" {
+            "stdin"
+        } else {
+            file_path
+                .to_str()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "non-UTF8 path"))?
+        };
+        if color && !write_out(stdout, SGR_BOLD)? {
+            return Ok(());
+        }
+        if !write_out(stdout, path_str.as_bytes())? {
+            return Ok(());
+        }
+        if color && !write_out(stdout, SGR_RESET)? {
+            return Ok(());
+        }
+        if !write_out(stdout, b"\n")? {
+            return Ok(());
+        }
+    }
+
+    for result in results {
+        if !write_out(stdout, &result)? {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
     let args = Args::parse();
+    let _ = args.all;
+
+    let sep = args
+        .separator
+        .bytes()
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty separator"))?;
+
     let interactive = args.pretty || io::stdout().is_terminal();
-    let show_offset = !args.no_offset && (interactive || args.radix.is_some());
-    let radix = args.radix.unwrap_or(Radix::D);
-    let color = interactive && std::env::var_os("NO_COLOR").is_none();
+    let explicit_radix = args.radix.is_some() || args.octal_offset;
+    let show_offset = !args.no_offset && (interactive || explicit_radix);
+    let radix = args
+        .radix
+        .or(args.octal_offset.then_some(Radix::O))
+        .unwrap_or(Radix::D);
+    let line_prefix = args.print_file_name && !args.no_filename;
+    let heading = interactive && !args.no_filename && !line_prefix;
+    let color = interactive && !line_prefix && std::env::var_os("NO_COLOR").is_none();
 
-    for file_path in &args.files {
-        let file = File::open(file_path)?;
-        let mmap = unsafe { MmapOptions::new().map(&file)? };
-        let bytes: &[u8] = &mmap;
-        let offset_width = if interactive && show_offset {
-            offset_width(bytes.len().saturating_sub(1), radix)
+    let files = if args.files.is_empty() {
+        vec![PathBuf::from("-")]
+    } else {
+        args.files
+    };
+
+    let stdout = io::stdout();
+    let mut stdout = io::BufWriter::new(stdout.lock());
+
+    for file_path in &files {
+        if file_path.as_os_str() == "-" {
+            let mut bytes = Vec::new();
+            io::stdin().lock().read_to_end(&mut bytes)?;
+            scan_bytes(
+                &bytes,
+                file_path,
+                args.min_len,
+                args.include_all_whitespace,
+                interactive,
+                show_offset,
+                radix,
+                color,
+                sep,
+                line_prefix,
+                heading,
+                &mut stdout,
+            )?;
         } else {
-            0
-        };
-
-        let chunk_size = 1_048_576;
-        let boundaries = chunk_boundaries(bytes, chunk_size);
-        let windows: Vec<[usize; 2]> = boundaries.windows(2).map(|w| [w[0], w[1]]).collect();
-
-        let results: Vec<Vec<u8>> = windows
-            .par_iter()
-            .map(|w| {
-                extract_strings(
-                    &bytes[w[0]..w[1]],
-                    args.min_len,
-                    w[0],
-                    show_offset,
-                    radix,
-                    color,
-                    offset_width,
-                )
-            })
-            .collect();
-
-        let stdout = io::stdout();
-        let mut stdout = io::BufWriter::new(stdout.lock());
-
-        let has_matches = results.iter().any(|r| !r.is_empty());
-        if has_matches && interactive && !args.no_filename {
-            let path_str = file_path
-                .to_str()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "non-UTF8 path"))?;
-            if color && !write_out(&mut stdout, SGR_BOLD)? {
-                return Ok(());
-            }
-            if !write_out(&mut stdout, path_str.as_bytes())? {
-                return Ok(());
-            }
-            if color && !write_out(&mut stdout, SGR_RESET)? {
-                return Ok(());
-            }
-            if !write_out(&mut stdout, b"\n")? {
-                return Ok(());
-            }
-        }
-
-        for result in results {
-            if !write_out(&mut stdout, &result)? {
-                return Ok(());
-            }
+            let file = File::open(file_path)?;
+            let mmap = unsafe { MmapOptions::new().map(&file)? };
+            scan_bytes(
+                &mmap,
+                file_path,
+                args.min_len,
+                args.include_all_whitespace,
+                interactive,
+                show_offset,
+                radix,
+                color,
+                sep,
+                line_prefix,
+                heading,
+                &mut stdout,
+            )?;
         }
     }
     Ok(())
