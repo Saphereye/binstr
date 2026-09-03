@@ -77,7 +77,7 @@ else
 fi
 
 if [[ ! -f "$TESTBIN" ]]; then
-  "$ROOT/scripts/gen.sh"
+  "$ROOT/scripts/gen.sh" "$TESTBIN"
 fi
 
 NUM_CPUS=$(nproc)
