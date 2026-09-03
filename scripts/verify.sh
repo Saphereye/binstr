@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
-TESTBIN="/usr/bin/godot"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TESTBIN="${TESTBIN:-$ROOT/target/bench/bench.bin}"
+
+if [[ ! -f "$TESTBIN" ]]; then
+  "$ROOT/scripts/gen.sh"
+fi
 
 cargo build --release
 git diff --no-index <(./target/release/binstr -N -I "$TESTBIN") <(strings "$TESTBIN")

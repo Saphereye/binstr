@@ -1,0 +1,22 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Install strings(1)
+        run: sudo apt-get update && sudo apt-get install -y binutils
+
+      - name: Compare output to GNU strings
+        run: ./scripts/verify.sh

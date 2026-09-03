@@ -74,23 +74,19 @@ const SGR_DIM: &[u8] = b"\x1b[2m";
 const SGR_BOLD: &[u8] = b"\x1b[1m";
 const SGR_RESET: &[u8] = b"\x1b[0m";
 
-fn is_string_byte(b: u8, whitespace: bool) -> bool {
-    if whitespace {
-        matches!(b, 0x09 | 0x0A | 0x0B | 0x0C | 0x0D | 0x20..=0x7E)
-    } else {
-        let in_range = (b.wrapping_sub(0x20) <= 0x5E) as u8;
-        let is_tab = (b == b'\t') as u8;
-        (in_range | is_tab) != 0
-    }
+const fn is_string_byte(b: u8) -> bool {
+    let in_range = (b.wrapping_sub(0x20) <= 0x5E) as u8;
+    let is_tab = (b == b'\t') as u8;
+    (in_range | is_tab) != 0
 }
 
-fn chunk_boundaries(bytes: &[u8], chunk_size: usize, whitespace: bool) -> Vec<usize> {
+fn chunk_boundaries(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
     let mut boundaries = vec![0];
     let mut pos = chunk_size.min(bytes.len());
 
     while pos < bytes.len() {
         while pos < bytes.len() {
-            if !whitespace && pos + simd::BLOCK <= bytes.len() {
+            if pos + simd::BLOCK <= bytes.len() {
                 let run = simd::string_run(unsafe { bytes.as_ptr().add(pos) });
                 pos += run;
                 if run < simd::BLOCK {
@@ -98,7 +94,30 @@ fn chunk_boundaries(bytes: &[u8], chunk_size: usize, whitespace: bool) -> Vec<us
                 }
                 continue;
             }
-            if is_string_byte(bytes[pos], whitespace) {
+            if is_string_byte(bytes[pos]) {
+                pos += 1;
+            } else {
+                break;
+            }
+        }
+        boundaries.push(pos);
+        pos = (pos + chunk_size).min(bytes.len());
+    }
+
+    if *boundaries.last().unwrap() != bytes.len() {
+        boundaries.push(bytes.len());
+    }
+
+    boundaries
+}
+
+fn chunk_boundaries_ws(bytes: &[u8], chunk_size: usize) -> Vec<usize> {
+    let mut boundaries = vec![0];
+    let mut pos = chunk_size.min(bytes.len());
+
+    while pos < bytes.len() {
+        while pos < bytes.len() {
+            if matches!(bytes[pos], 0x09 | 0x0A | 0x0B | 0x0C | 0x0D | 0x20..=0x7E) {
                 pos += 1;
             } else {
                 break;
@@ -238,7 +257,12 @@ fn extract_strings(
                 continue;
             }
 
-            if is_string_byte(chunk[i], whitespace) {
+            let ok = if whitespace {
+                matches!(chunk[i], 0x09 | 0x0A | 0x0B | 0x0C | 0x0D | 0x20..=0x7E)
+            } else {
+                is_string_byte(chunk[i])
+            };
+            if ok {
                 start.get_or_insert(i);
             } else if let Some(s) = start.take() {
                 emit(
@@ -371,6 +395,46 @@ fn scan_ranges(bytes: &[u8], data_only: bool) -> Vec<(usize, usize)> {
     }
 }
 
+fn process_slice(
+    slice: &[u8],
+    base_off: usize,
+    min_len: usize,
+    show_offset: bool,
+    radix: Radix,
+    color: bool,
+    off_width: usize,
+    gnu_offset: bool,
+    whitespace: bool,
+    sep: u8,
+    prefix: Option<&[u8]>,
+) -> Vec<Vec<u8>> {
+    let chunk_size = 1_048_576;
+    let boundaries = if whitespace {
+        chunk_boundaries_ws(slice, chunk_size)
+    } else {
+        chunk_boundaries(slice, chunk_size)
+    };
+    let windows: Vec<[usize; 2]> = boundaries.windows(2).map(|w| [w[0], w[1]]).collect();
+    windows
+        .par_iter()
+        .map(|w| {
+            extract_strings(
+                &slice[w[0]..w[1]],
+                min_len,
+                base_off + w[0],
+                show_offset,
+                radix,
+                color,
+                off_width,
+                gnu_offset,
+                whitespace,
+                sep,
+                prefix,
+            )
+        })
+        .collect()
+}
+
 fn scan_bytes(
     bytes: &[u8],
     file_path: &PathBuf,
@@ -404,34 +468,40 @@ fn scan_bytes(
         None
     };
     let prefix_ref = prefix.as_deref();
-    let chunk_size = 1_048_576;
-    let mut results: Vec<Vec<u8>> = Vec::new();
 
-    for (start, end) in scan_ranges(bytes, data_only) {
-        let slice = &bytes[start..end];
-        let boundaries = chunk_boundaries(slice, chunk_size, whitespace);
-        let windows: Vec<[usize; 2]> = boundaries.windows(2).map(|w| [w[0], w[1]]).collect();
-        results.extend(
-            windows
-                .par_iter()
-                .map(|w| {
-                    extract_strings(
-                        &slice[w[0]..w[1]],
-                        min_len,
-                        start + w[0],
-                        show_offset,
-                        radix,
-                        color,
-                        off_width,
-                        gnu_offset,
-                        whitespace,
-                        sep,
-                        prefix_ref,
-                    )
-                })
-                .collect::<Vec<_>>(),
-        );
-    }
+    let results = if data_only {
+        let mut out = Vec::new();
+        for (start, end) in scan_ranges(bytes, true) {
+            out.extend(process_slice(
+                &bytes[start..end],
+                start,
+                min_len,
+                show_offset,
+                radix,
+                color,
+                off_width,
+                gnu_offset,
+                whitespace,
+                sep,
+                prefix_ref,
+            ));
+        }
+        out
+    } else {
+        process_slice(
+            bytes,
+            0,
+            min_len,
+            show_offset,
+            radix,
+            color,
+            off_width,
+            gnu_offset,
+            whitespace,
+            sep,
+            prefix_ref,
+        )
+    };
 
     let has_matches = results.iter().any(|r| !r.is_empty());
     if has_matches && heading {
