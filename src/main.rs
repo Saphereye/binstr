@@ -134,6 +134,7 @@ fn extract_strings(
     radix: Radix,
     color: bool,
     offset_width: usize,
+    gnu_offset: bool,
     whitespace: bool,
     sep: u8,
     prefix: Option<&[u8]>,
@@ -171,6 +172,7 @@ fn extract_strings(
                                 radix,
                                 color,
                                 offset_width,
+                                gnu_offset,
                                 sep,
                                 prefix,
                             );
@@ -195,6 +197,7 @@ fn extract_strings(
                             radix,
                             color,
                             offset_width,
+                            gnu_offset,
                             sep,
                             prefix,
                         );
@@ -216,6 +219,7 @@ fn extract_strings(
                                 radix,
                                 color,
                                 offset_width,
+                                gnu_offset,
                                 sep,
                                 prefix,
                             );
@@ -244,6 +248,7 @@ fn extract_strings(
                     radix,
                     color,
                     offset_width,
+                    gnu_offset,
                     sep,
                     prefix,
                 );
@@ -264,6 +269,7 @@ fn extract_strings(
                 radix,
                 color,
                 offset_width,
+                gnu_offset,
                 sep,
                 prefix,
             );
@@ -285,6 +291,7 @@ unsafe fn emit(
     radix: Radix,
     color: bool,
     offset_width: usize,
+    gnu_offset: bool,
     sep: u8,
     prefix: Option<&[u8]>,
 ) {
@@ -302,7 +309,7 @@ unsafe fn emit(
                 std::ptr::copy_nonoverlapping(SGR_DIM.as_ptr(), base.add(*len), SGR_DIM.len());
                 *len += SGR_DIM.len();
             }
-            write_offset(base, len, base_off + start, radix, offset_width);
+            write_offset(base, len, base_off + start, radix, offset_width, gnu_offset);
             if color {
                 std::ptr::copy_nonoverlapping(SGR_RESET.as_ptr(), base.add(*len), SGR_RESET.len());
                 *len += SGR_RESET.len();
@@ -315,7 +322,7 @@ unsafe fn emit(
     }
 }
 
-fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix, width: usize) {
+fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix, width: usize, gnu: bool) {
     let mut buf = [0u8; 24];
     let (b, digits): (usize, &[u8]) = match radix {
         Radix::D => (10, b"0123456789"),
@@ -323,7 +330,7 @@ fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix, width: u
         Radix::X => (16, b"0123456789abcdef"),
     };
     let mut i = 23;
-    buf[i] = b':';
+    buf[i] = if gnu { b' ' } else { b':' };
     if n == 0 {
         i -= 1;
         buf[i] = b'0';
@@ -335,7 +342,13 @@ fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix, width: u
             n /= b;
         }
     }
-    let pad = width.saturating_sub(23 - i);
+    let digit_len = 23 - i;
+    let width = if gnu {
+        7_usize.max(width).max(digit_len)
+    } else {
+        width.max(digit_len)
+    };
+    let pad = width.saturating_sub(digit_len);
     i -= pad;
     buf[i..i + pad].fill(b' ');
     let written = 24 - i;
@@ -354,12 +367,13 @@ fn scan_bytes(
     show_offset: bool,
     radix: Radix,
     color: bool,
+    gnu_offset: bool,
     sep: u8,
     line_prefix: bool,
     heading: bool,
     stdout: &mut impl Write,
 ) -> io::Result<()> {
-    let off_width = if interactive && show_offset {
+    let off_width = if show_offset {
         offset_width(bytes.len().saturating_sub(1), radix)
     } else {
         0
@@ -393,6 +407,7 @@ fn scan_bytes(
                 radix,
                 color,
                 off_width,
+                gnu_offset,
                 whitespace,
                 sep,
                 prefix_ref,
@@ -450,6 +465,7 @@ fn main() -> io::Result<()> {
         .unwrap_or(Radix::D);
     let line_prefix = args.print_file_name && !args.no_filename;
     let heading = interactive && !args.no_filename && !line_prefix;
+    let gnu_offset = explicit_radix || !interactive;
     let color = interactive && !line_prefix && std::env::var_os("NO_COLOR").is_none();
 
     let files = if args.files.is_empty() {
@@ -474,6 +490,7 @@ fn main() -> io::Result<()> {
                 show_offset,
                 radix,
                 color,
+                gnu_offset,
                 sep,
                 line_prefix,
                 heading,
@@ -491,6 +508,7 @@ fn main() -> io::Result<()> {
                 show_offset,
                 radix,
                 color,
+                gnu_offset,
                 sep,
                 line_prefix,
                 heading,
