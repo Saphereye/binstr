@@ -1,3 +1,4 @@
+mod elf;
 mod simd;
 
 use clap::Parser;
@@ -20,6 +21,10 @@ struct Args {
     /// Scan the entire file
     #[arg(short = 'a', default_value_t = true)]
     all: bool,
+
+    /// Skip executable ELF sections
+    #[arg(short = 'd', long = "data")]
+    data_only: bool,
 
     /// Minimum string length
     #[arg(short = 'n', long = "bytes", default_value_t = 4)]
@@ -358,12 +363,20 @@ fn write_offset(base: *mut u8, len: &mut usize, n: usize, radix: Radix, width: u
     *len += written;
 }
 
+fn scan_ranges(bytes: &[u8], data_only: bool) -> Vec<(usize, usize)> {
+    if data_only {
+        elf::data_ranges(bytes).unwrap_or_else(|| vec![(0, bytes.len())])
+    } else {
+        vec![(0, bytes.len())]
+    }
+}
+
 fn scan_bytes(
     bytes: &[u8],
     file_path: &PathBuf,
     min_len: usize,
     whitespace: bool,
-    interactive: bool,
+    data_only: bool,
     show_offset: bool,
     radix: Radix,
     color: bool,
@@ -391,29 +404,34 @@ fn scan_bytes(
         None
     };
     let prefix_ref = prefix.as_deref();
-
     let chunk_size = 1_048_576;
-    let boundaries = chunk_boundaries(bytes, chunk_size, whitespace);
-    let windows: Vec<[usize; 2]> = boundaries.windows(2).map(|w| [w[0], w[1]]).collect();
+    let mut results: Vec<Vec<u8>> = Vec::new();
 
-    let results: Vec<Vec<u8>> = windows
-        .par_iter()
-        .map(|w| {
-            extract_strings(
-                &bytes[w[0]..w[1]],
-                min_len,
-                w[0],
-                show_offset,
-                radix,
-                color,
-                off_width,
-                gnu_offset,
-                whitespace,
-                sep,
-                prefix_ref,
-            )
-        })
-        .collect();
+    for (start, end) in scan_ranges(bytes, data_only) {
+        let slice = &bytes[start..end];
+        let boundaries = chunk_boundaries(slice, chunk_size, whitespace);
+        let windows: Vec<[usize; 2]> = boundaries.windows(2).map(|w| [w[0], w[1]]).collect();
+        results.extend(
+            windows
+                .par_iter()
+                .map(|w| {
+                    extract_strings(
+                        &slice[w[0]..w[1]],
+                        min_len,
+                        start + w[0],
+                        show_offset,
+                        radix,
+                        color,
+                        off_width,
+                        gnu_offset,
+                        whitespace,
+                        sep,
+                        prefix_ref,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
 
     let has_matches = results.iter().any(|r| !r.is_empty());
     if has_matches && heading {
@@ -486,7 +504,7 @@ fn main() -> io::Result<()> {
                 file_path,
                 args.min_len,
                 args.include_all_whitespace,
-                interactive,
+                args.data_only,
                 show_offset,
                 radix,
                 color,
@@ -504,7 +522,7 @@ fn main() -> io::Result<()> {
                 file_path,
                 args.min_len,
                 args.include_all_whitespace,
-                interactive,
+                args.data_only,
                 show_offset,
                 radix,
                 color,
