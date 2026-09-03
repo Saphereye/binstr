@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 out="${1:-$root/target/bench/bench.bin}"
-size_mb="${2:-173}"
+size_mb="${2:-1024}"
 seed="${SEED:-42}"
 gen="$root/target/bench/gen"
 
@@ -67,7 +67,7 @@ static void string_region(size_t n)
 
 int main(int argc, char **argv)
 {
-  unsigned blocks = 173;
+  unsigned blocks = 1024;
   unsigned base_seed = 42;
 
   if (argc > 1)
@@ -91,4 +91,4 @@ fi
 
 echo "Generating ${size_mb}MB bench file (seed=$seed) -> $out"
 LC_ALL=C "$gen" "$size_mb" "$seed" >"$out"
-echo "Wrote $(numfmt --to=iec "$(stat -c%s "$out")") ($(strings "$out" | wc -l) strings)"
+echo "Wrote $(numfmt --to=iec "$(stat -c%s "$out")")"
