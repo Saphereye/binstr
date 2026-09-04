@@ -19,6 +19,12 @@ jobs:
       - name: Install strings(1)
         run: sudo apt-get update && sudo apt-get install -y binutils
 
+      - name: Install hyperfine
+        run: |
+          ver=1.18.0
+          curl -sL "https://github.com/sharkdp/hyperfine/releases/download/v${ver}/hyperfine-v${ver}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar xz --strip-components=1 -C /usr/local/bin hyperfine-v${ver}-x86_64-unknown-linux-gnu/hyperfine
+
       - name: Build binstr
         run: cargo build --release
 

@@ -21,7 +21,23 @@ warmup: 3, runs: 10
 | `binstr (2 threads)` | 0.450 ± 0.008 | 0.433 | 0.463 | 1.54 ± 0.03 |
 | `binstr (4 threads)` | 0.293 ± 0.004 | 0.289 | 0.299 | 1.00 |
 
-Reproduce: `./scripts/stats.sh` (throughput). Patch A/B: `./scripts/bench.sh` (1 thread) or `./scripts/bench.sh mt` (all cores).
+## Scripts
+
+Generate the benchmark table (stdout, markdown):
+
+```bash
+./scripts/stats.sh [runs] [size_mb] [testbin]
+```
+
+Compare a code change against git HEAD (builds both binaries):
+
+```bash
+./scripts/bench.sh [runs] [testbin]              # 1 thread, CPU 0
+./scripts/bench.sh mt [runs] [testbin]           # all cores, both binaries
+./scripts/bench.sh <baseline> <patch> [runs]   # two binaries directly
+```
+
+Test file defaults to `target/bench/bench.bin` (1 GB). Generate with `./scripts/gen.sh`.
 
 ## Building
 
