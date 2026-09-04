@@ -15,6 +15,8 @@ With two binaries, compares them directly (use the same path twice as a sanity c
 EOF
 }
 
+WARMUP="${WARMUP:-3}"
+
 build_pair() {
   PATCH="/tmp/binstr_patch"
   BASELINE="/tmp/binstr_baseline"
@@ -110,6 +112,19 @@ run_scan() {
   fi
 }
 
+time_scan() {
+  local cpus=$1
+  local tool=$2
+
+  run_scan "$cpus" "$tool"
+
+  local start end
+  start=$(date +%s.%N)
+  run_scan "$cpus" "$tool"
+  end=$(date +%s.%N)
+  awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }'
+}
+
 echo "Baseline: $BASELINE"
 echo "Patch:    $PATCH"
 echo "Test file: $TESTBIN ($(numfmt --to=iec "$(stat -c%s "$TESTBIN")"))"
@@ -118,43 +133,26 @@ echo "CPU sets: A: $CPUS_A, B: $CPUS_B"
 BASE_TIMES=()
 PATCH_TIMES=()
 
+for ((w = 0; w < WARMUP; w++)); do
+  run_scan "$CPUS_A" "$BASELINE"
+  run_scan "$CPUS_A" "$PATCH"
+done
+
 echo -e "\nRunning $RUNS iterations...\n"
 printf "%3s %10s %10s %10s\n" "run" "baseline(ms)" "patch(ms)" "diff(ms)"
 
 for ((i = 0; i < RUNS; i++)); do
   if (( i % 2 == 0 )); then
-    BASE_CPUS=$CPUS_A
-    PATCH_CPUS=$CPUS_B
+    CPUS=$CPUS_A
   else
-    BASE_CPUS=$CPUS_B
-    PATCH_CPUS=$CPUS_A
+    CPUS=$CPUS_B
   fi
 
-  if (( i % 2 == 0 )); then
-    start=$(date +%s.%N)
-    run_scan "$BASE_CPUS" "$BASELINE"
-    end=$(date +%s.%N)
-    BASE_TIME=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }')
-    BASE_TIMES+=("$BASE_TIME")
+  BASE_TIME=$(time_scan "$CPUS" "$BASELINE")
+  BASE_TIMES+=("$BASE_TIME")
 
-    start=$(date +%s.%N)
-    run_scan "$PATCH_CPUS" "$PATCH"
-    end=$(date +%s.%N)
-    PATCH_TIME=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }')
-    PATCH_TIMES+=("$PATCH_TIME")
-  else
-    start=$(date +%s.%N)
-    run_scan "$PATCH_CPUS" "$PATCH"
-    end=$(date +%s.%N)
-    PATCH_TIME=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }')
-    PATCH_TIMES+=("$PATCH_TIME")
-
-    start=$(date +%s.%N)
-    run_scan "$BASE_CPUS" "$BASELINE"
-    end=$(date +%s.%N)
-    BASE_TIME=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }')
-    BASE_TIMES+=("$BASE_TIME")
-  fi
+  PATCH_TIME=$(time_scan "$CPUS" "$PATCH")
+  PATCH_TIMES+=("$PATCH_TIME")
 
   BASE_MS=$(awk -v t="$BASE_TIME" 'BEGIN { printf "%.3f", t * 1000 }')
   PATCH_MS=$(awk -v t="$PATCH_TIME" 'BEGIN { printf "%.3f", t * 1000 }')
