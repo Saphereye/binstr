@@ -197,6 +197,7 @@ fn extract_plain(chunk: &[u8], min_len: usize, sep: u8) -> Vec<u8> {
 
         while i < chunk.len() {
             if i + simd::BLOCK <= chunk.len() {
+                simd::prefetch(chunk.as_ptr(), i, chunk.len());
                 match simd::step32(chunk.as_ptr().add(i), start.is_some()) {
                     simd::Step32::Blank(n) => {
                         if let Some(s) = start.take() {
