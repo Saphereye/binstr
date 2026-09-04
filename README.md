@@ -10,15 +10,16 @@ binstr <file>
 ```
 
 ## Benchmark
-These were taken with main branch on commit [50dbb5ab](https://github.com/Saphereye/binstr/commit/50dbb5abfbed67ad62fb82340894f1411e7c957a).
+commit: [5ee15495](https://github.com/Saphereye/binstr/commit/5ee15495aeef77ec5f12696ea7ae11232d500b14)
 
-| | mean time | vs `strings -n 1` |
-|---|---|---|
-| `strings -n 1` (baseline) | ~1639 ms | — |
-| `binstr`, 4 threads | ~168 ms | ~9.7x faster |
-| `binstr`, single threaded | ~325 ms | ~5.0x faster |
+warmup: 3, runs: 10
 
-These were done on a ~100Mb binary and can be reproduced using `./scripts/bench.sh`
+| Command | Mean [s] | Min [s] | Max [s] | Relative |
+|:---|---:|---:|---:|---:|
+| `strings -n 1` | 7.658 ± 0.359 | 7.229 | 8.257 | 26.12 ± 1.27 |
+| `binstr (1 thread)` | 0.814 ± 0.028 | 0.787 | 0.854 | 2.78 ± 0.10 |
+| `binstr (2 threads)` | 0.450 ± 0.008 | 0.433 | 0.463 | 1.54 ± 0.03 |
+| `binstr (4 threads)` | 0.293 ± 0.004 | 0.289 | 0.299 | 1.00 |
 
 ## Building
 
