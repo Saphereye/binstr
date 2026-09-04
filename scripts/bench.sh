@@ -4,18 +4,43 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEFAULT_BIN="${TESTBIN:-$ROOT/target/bench/bench.bin}"
 
+# Default: 1 thread / 1 core (low noise). Pass `mt` for all cores on both binaries.
+WARMUP="${WARMUP:-3}"
+
+all_cpus() {
+  local n max=$(( $(nproc) - 1 ))
+  local cpus=""
+  local i
+  for ((i = 0; i <= max; i++)); do
+    cpus+="${cpus:+,}$i"
+  done
+  printf '%s\n' "$cpus"
+}
+
 usage() {
   cat <<EOF
 usage: $0 [runs] [testbin]
+       $0 mt [runs] [testbin]
        $0 <baseline> <patch> [testbin] [runs]
+       $0 mt <baseline> <patch> [testbin] [runs]
 
-Default testbin: \$TESTBIN or $DEFAULT_BIN
-With one form, builds patch from the working tree and baseline via git stash.
-With two binaries, compares them directly (use the same path twice as a sanity check).
+Default: 1 thread, CPU 0 (low-noise A/B).
+  mt:     RAYON_NUM_THREADS=\$(nproc), taskset all cores — same for baseline and patch.
+
+Throughput vs strings: ./scripts/stats.sh
 EOF
 }
 
-WARMUP="${WARMUP:-3}"
+if [[ "${1:-}" == "mt" ]]; then
+  MT=1
+  shift
+  THREADS="${THREADS:-$(nproc)}"
+  CPUS="${CPUS:-$(all_cpus)}"
+else
+  MT=0
+  THREADS="${THREADS:-1}"
+  CPUS="${CPUS:-0}"
+fi
 
 build_pair() {
   PATCH="/tmp/binstr_patch"
@@ -82,45 +107,24 @@ if [[ ! -f "$TESTBIN" ]]; then
   "$ROOT/scripts/gen.sh" "$TESTBIN"
 fi
 
-NUM_CPUS=$(nproc)
-NUM_CORES=$(lscpu -p=CORE | grep -v '^#' | sort -u | wc -l)
-if (( NUM_CORES == 0 )); then
-  echo "Could not determine CPU topology" >&2
-  exit 1
-fi
-CPU_STEP=$((NUM_CPUS / NUM_CORES))
-
-CPUS_A=""
-CPUS_B=""
-for ((i = 0; i < CPU_STEP; i++)); do
-  for ((cpu = i; cpu < NUM_CPUS; cpu += CPU_STEP * 2)); do
-    CPUS_A+="${CPUS_A:+,}$cpu"
-  done
-  for ((cpu = i + CPU_STEP; cpu < NUM_CPUS; cpu += CPU_STEP * 2)); do
-    CPUS_B+="${CPUS_B:+,}$cpu"
-  done
-done
-
 run_scan() {
-  local cpus=$1
-  local tool=$2
+  local tool=$1
 
   if [[ "$(basename "$tool")" == "strings" ]]; then
-    taskset -c "$cpus" "$tool" "$TESTBIN" > /dev/null
+    taskset -c "$CPUS" "$tool" "$TESTBIN" > /dev/null
   else
-    taskset -c "$cpus" "$tool" -N -I "$TESTBIN" > /dev/null
+    taskset -c "$CPUS" env RAYON_NUM_THREADS="$THREADS" "$tool" -N -I "$TESTBIN" > /dev/null
   fi
 }
 
 time_scan() {
-  local cpus=$1
-  local tool=$2
+  local tool=$1
 
-  run_scan "$cpus" "$tool"
+  run_scan "$tool"
 
   local start end
   start=$(date +%s.%N)
-  run_scan "$cpus" "$tool"
+  run_scan "$tool"
   end=$(date +%s.%N)
   awk -v s="$start" -v e="$end" 'BEGIN { printf "%.6f", e - s }'
 }
@@ -128,30 +132,24 @@ time_scan() {
 echo "Baseline: $BASELINE"
 echo "Patch:    $PATCH"
 echo "Test file: $TESTBIN ($(numfmt --to=iec "$(stat -c%s "$TESTBIN")"))"
-echo "CPU sets: A: $CPUS_A, B: $CPUS_B"
+echo "Setup: RAYON_NUM_THREADS=$THREADS, taskset -c $CPUS$([[ $MT -eq 1 ]] && echo ' (mt)')"
 
 BASE_TIMES=()
 PATCH_TIMES=()
 
 for ((w = 0; w < WARMUP; w++)); do
-  run_scan "$CPUS_A" "$BASELINE"
-  run_scan "$CPUS_A" "$PATCH"
+  run_scan "$BASELINE"
+  run_scan "$PATCH"
 done
 
 echo -e "\nRunning $RUNS iterations...\n"
 printf "%3s %10s %10s %10s\n" "run" "baseline(ms)" "patch(ms)" "diff(ms)"
 
 for ((i = 0; i < RUNS; i++)); do
-  if (( i % 2 == 0 )); then
-    CPUS=$CPUS_A
-  else
-    CPUS=$CPUS_B
-  fi
-
-  BASE_TIME=$(time_scan "$CPUS" "$BASELINE")
+  BASE_TIME=$(time_scan "$BASELINE")
   BASE_TIMES+=("$BASE_TIME")
 
-  PATCH_TIME=$(time_scan "$CPUS" "$PATCH")
+  PATCH_TIME=$(time_scan "$PATCH")
   PATCH_TIMES+=("$PATCH_TIME")
 
   BASE_MS=$(awk -v t="$BASE_TIME" 'BEGIN { printf "%.3f", t * 1000 }')

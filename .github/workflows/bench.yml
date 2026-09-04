@@ -23,4 +23,4 @@ jobs:
         run: cargo build --release
 
       - name: Bench binstr vs strings
-        run: ./scripts/bench.sh strings target/release/binstr 3
+        run: ./scripts/stats.sh 3
