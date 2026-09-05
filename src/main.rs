@@ -198,40 +198,53 @@ fn extract_plain(chunk: &[u8], min_len: usize, sep: u8) -> Vec<u8> {
         while i < chunk.len() {
             if i + simd::BLOCK <= chunk.len() {
                 simd::prefetch(chunk.as_ptr(), i, chunk.len());
-                match simd::step32(chunk.as_ptr().add(i), start.is_some()) {
-                    simd::Step32::Blank(n) => {
-                        if let Some(s) = start.take() {
-                            emit_plain(base, &mut len, chunk, s, i, min_len, sep);
+                if start.is_some() {
+                    match simd::step32(chunk.as_ptr().add(i), true) {
+                        simd::Step32::Blank(n) => {
+                            if let Some(s) = start.take() {
+                                emit_plain(base, &mut len, chunk, s, i, min_len, sep);
+                            }
+                            i += n;
                         }
-                        i += n;
-                    }
-                    simd::Step32::Solid(n) => {
-                        start.get_or_insert(i);
-                        i += n;
-                    }
-                    simd::Step32::Closed(n) => {
-                        let end = i + n;
-                        emit_plain(
-                            base,
-                            &mut len,
-                            chunk,
-                            start.take().unwrap(),
-                            end,
-                            min_len,
-                            sep,
-                        );
-                        i = end + 1;
-                    }
-                    simd::Step32::Opened { skip, len: run } => {
-                        i += skip;
-                        let end = i + run;
-                        if run < simd::BLOCK - skip {
-                            emit_plain(base, &mut len, chunk, i, end, min_len, sep);
+                        simd::Step32::Solid(n) => {
+                            i += n;
+                        }
+                        simd::Step32::Closed(n) => {
+                            let end = i + n;
+                            emit_plain(
+                                base,
+                                &mut len,
+                                chunk,
+                                start.take().unwrap(),
+                                end,
+                                min_len,
+                                sep,
+                            );
                             i = end + 1;
-                        } else {
-                            start = Some(i);
-                            i = end;
                         }
+                        simd::Step32::Opened { .. } => unreachable!(),
+                    }
+                } else {
+                    match simd::step32(chunk.as_ptr().add(i), false) {
+                        simd::Step32::Blank(n) => {
+                            i += n;
+                        }
+                        simd::Step32::Solid(n) => {
+                            start = Some(i);
+                            i += n;
+                        }
+                        simd::Step32::Opened { skip, len: run } => {
+                            i += skip;
+                            let end = i + run;
+                            if run < simd::BLOCK - skip {
+                                emit_plain(base, &mut len, chunk, i, end, min_len, sep);
+                                i = end + 1;
+                            } else {
+                                start = Some(i);
+                                i = end;
+                            }
+                        }
+                        simd::Step32::Closed(_) => unreachable!(),
                     }
                 }
                 continue;
