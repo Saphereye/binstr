@@ -14,7 +14,7 @@ trap 'rm -f "$HF_OUT"' EXIT
 cargo build --release --manifest-path "$ROOT/Cargo.toml" >/dev/null
 
 hyperfine --warmup "$WARMUP" --runs "$RUNS" --export-markdown "$HF_OUT" \
-  -n "strings -n 1" "strings -n 1 '$TESTBIN' > /dev/null" \
+  -n "LC_ALL=C strings -n 1" "LC_ALL=C strings -n 1 '$TESTBIN' > /dev/null" \
   -n "binstr (1 thread)" "RAYON_NUM_THREADS=1 '$BIN' -N -I '$TESTBIN' > /dev/null" \
   -n "binstr (2 threads)" "RAYON_NUM_THREADS=2 '$BIN' -N -I '$TESTBIN' > /dev/null" \
   -n "binstr (4 threads)" "RAYON_NUM_THREADS=4 '$BIN' -N -I '$TESTBIN' > /dev/null" \

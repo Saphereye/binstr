@@ -111,7 +111,7 @@ run_scan() {
   local tool=$1
 
   if [[ "$(basename "$tool")" == "strings" ]]; then
-    taskset -c "$CPUS" "$tool" "$TESTBIN" > /dev/null
+    taskset -c "$CPUS" env LC_ALL=C "$tool" "$TESTBIN" > /dev/null
   else
     taskset -c "$CPUS" env RAYON_NUM_THREADS="$THREADS" "$tool" -N -I "$TESTBIN" > /dev/null
   fi

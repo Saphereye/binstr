@@ -10,16 +10,16 @@ binstr <file>
 ```
 
 ## Benchmark
-commit: [5ee15495](https://github.com/Saphereye/binstr/commit/5ee15495aeef77ec5f12696ea7ae11232d500b14)
+commit: [71c2c7a5](https://github.com/Saphereye/binstr/commit/71c2c7a5d34b17ca39c28ff233dcd7b6fb0e95b7)
 
 warmup: 3, runs: 10
 
 | Command | Mean [s] | Min [s] | Max [s] | Relative |
 |:---|---:|---:|---:|---:|
-| `strings -n 1` | 7.658 ± 0.359 | 7.229 | 8.257 | 26.12 ± 1.27 |
-| `binstr (1 thread)` | 0.814 ± 0.028 | 0.787 | 0.854 | 2.78 ± 0.10 |
-| `binstr (2 threads)` | 0.450 ± 0.008 | 0.433 | 0.463 | 1.54 ± 0.03 |
-| `binstr (4 threads)` | 0.293 ± 0.004 | 0.289 | 0.299 | 1.00 |
+| `LC_ALL=C strings -n 1` | 7.472 ± 0.240 | 7.053 | 7.764 | 22.90 ± 0.86 |
+| `binstr (1 thread)` | 0.754 ± 0.014 | 0.735 | 0.774 | 2.31 ± 0.06 |
+| `binstr (2 threads)` | 0.412 ± 0.026 | 0.394 | 0.467 | 1.26 ± 0.08 |
+| `binstr (4 threads)` | 0.326 ± 0.006 | 0.319 | 0.341 | 1.00 |
 
 ## Scripts
 
