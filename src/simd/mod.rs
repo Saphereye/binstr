@@ -8,7 +8,6 @@ pub enum Step32 {
 pub const BLOCK: usize = 32;
 pub const PREFETCH_AHEAD: usize = 512;
 
-#[inline(always)]
 pub unsafe fn prefetch(base: *const u8, off: usize, len: usize) {
     let ahead = off + PREFETCH_AHEAD;
     if ahead <= len {
